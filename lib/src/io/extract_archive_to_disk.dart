@@ -153,7 +153,7 @@ String getInputExtension(String inputPath) {
 }
 
 Future<void> extractFileToDisk(String inputPath, String outputPath,
-    {String? password, int? bufferSize, ArchiveCallback? callback}) async {
+    {String? password, int? bufferSize, ArchiveCallback? callback, String zipSuffix = '.zip'}) async {
   Directory? tempDir;
   var archivePath = inputPath;
 
@@ -209,7 +209,7 @@ Future<void> extractFileToDisk(String inputPath, String outputPath,
     final input = InputFileStream(archivePath);
     archive = TarDecoder().decodeStream(input, callback: callback);
     toClose = input;
-  } else if (archiveExt == '.zip') {
+  } else if (archiveExt == zipSuffix) {
     final input = InputFileStream(archivePath);
     archive = ZipDecoder()
         .decodeStream(input, password: password, callback: callback);
