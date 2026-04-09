@@ -1,7 +1,16 @@
-## 4.0.8 - May 31, 2025
+## 4.0.9 - February 17, 2026
+
+- Fix extractFileToDisk file extension handling, where foo.bar.zip would fail.
+- 
+
+## 4.0.8 - February 16, 2026
 
 - Remove dependency to crypto package
 - Removed Adler32 and Crc32 classes
+- Fix: extractArchiveToDisk extensions should be case insensitive.
+- Fix: extractFileToDisk for .tar.gz files
+- Add ZipFileEncoder.addDirectorySync
+- Always use posix separators for ZipFileEncoder
 
 ## 4.0.7 - April 22, 2025
 

@@ -106,6 +106,20 @@ void _testInputOutputFileStream(
 }
 
 void main() {
+  test('zipFileEncoder', () async {
+    final encoder = ZipFileEncoder();
+    encoder.create('$testOutputPath/zipFileEncoder.zip');
+    encoder.addDirectorySync(Directory('test/_data/test2'),
+        includeDirName: false);
+    encoder.closeSync();
+
+    final zip = ZipDecoder().decodeBytes(
+        File('$testOutputPath/zipFileEncoder.zip').readAsBytesSync());
+    for (final f in zip) {
+      expect(f.name.contains('\\'), false, reason: f.name);
+    }
+  });
+
   test('inputExtension', () async {
     expect(getInputExtension('test.zip') == '.zip', isTrue);
     expect(getInputExtension('test.ZIP') == '.zip', isTrue);
