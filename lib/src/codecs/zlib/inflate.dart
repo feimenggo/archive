@@ -203,6 +203,11 @@ class Inflate {
     // read max length
     final codeWithLength = codeTable[_bitBuffer & ((1 << maxCodeLength) - 1)];
     final codeLength = codeWithLength >> 16;
+    // An entry no code was assigned to: the code is incomplete, which is
+    // damage. Consuming no bits, it would otherwise be read again forever
+    if (codeLength == 0) {
+      return -1;
+    }
 
     _bitBuffer >>= codeLength;
     _bitBufferLen -= codeLength;
@@ -329,21 +334,15 @@ class Inflate {
       }
       final distance =
           _distCodeTable[distCode] + _readBits(_distExtraTable[distCode]);
+      // A match can only reach back into what has been written. Further is
+      // damage, and would index behind the output, or with a distance of
+      // zero never finish
+      if (distance < 1 || distance > _output.length) {
+        return -1;
+      }
 
       // lz77 decode
-      while (codeLength > distance) {
-        final bytes = _output.subset(-distance);
-        _output.writeBytes(bytes);
-        codeLength -= distance;
-      }
-
-      if (codeLength == distance) {
-        final bytes = _output.subset(-distance);
-        _output.writeBytes(bytes);
-      } else {
-        final bytes = _output.subset(-distance, codeLength - distance);
-        _output.writeBytes(bytes);
-      }
+      _output.writeBackReference(distance, codeLength);
     }
 
     while (_bitBufferLen >= 8) {
@@ -370,6 +369,9 @@ class Inflate {
             return -1;
           }
           repeat += 3;
+          if (i + repeat > num) {
+            return -1;
+          }
           while (repeat-- > 0) {
             codeLengths[i++] = prev;
           }
@@ -381,6 +383,9 @@ class Inflate {
             return -1;
           }
           repeat += 3;
+          if (i + repeat > num) {
+            return -1;
+          }
           while (repeat-- > 0) {
             codeLengths[i++] = 0;
           }
@@ -393,6 +398,11 @@ class Inflate {
             return -1;
           }
           repeat += 11;
+          // A run past the end of the lengths is damage, and would index
+          // past the array
+          if (i + repeat > num) {
+            return -1;
+          }
           while (repeat-- > 0) {
             codeLengths[i++] = 0;
           }

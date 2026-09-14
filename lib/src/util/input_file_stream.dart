@@ -73,9 +73,16 @@ class InputFileStream extends InputStream {
             ? new FileBuffer.from(other._file, bufferSize: bufferSize)
             : other._file,
         _fileOffset = other._fileOffset + (position ?? 0),
-        _fileSize = length ?? other._fileSize,
         _position = 0,
-        super(byteOrder: other.byteOrder);
+        super(byteOrder: other.byteOrder) {
+    // A subset ends where its source does. peekBytes asks past the end of a
+    // file, where the buffer still holds earlier bytes
+    final available = other._fileSize - (position ?? 0);
+    _fileSize = length == null || length > available ? available : length;
+    if (_fileSize < 0) {
+      _fileSize = 0;
+    }
+  }
 
   @override
   bool open() => _file.open();
@@ -117,6 +124,19 @@ class InputFileStream extends InputStream {
 
   int get fileRemaining => _fileSize - _position;
 
+  /// The [FileBuffer] this stream reads through.
+  ///
+  /// Exposed so that a decoder can find the file behind the stream and read
+  /// parts of it directly, for instance to hand disjoint ranges to isolates
+  /// instead of copying them.
+  FileBuffer get fileBuffer => _file;
+
+  /// Offset of this stream's first byte within the underlying file.
+  int get fileOffset => _fileOffset;
+
+  /// Total number of bytes this stream covers, whatever the read position.
+  int get fileLength => _fileSize;
+
   @override
   void reset() {
     _position = 0;
@@ -146,7 +166,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return 0;
     }
-    final b = _file.readUint8(_fileOffset + _position, _fileSize);
+    final b = _file.readUint8(_fileOffset + _position);
     _position++;
     return b;
   }
@@ -157,7 +177,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return 0;
     }
-    final b = _file.readUint16(_fileOffset + _position, _fileSize);
+    final b = _file.readUint16(_fileOffset + _position);
     _position += 2;
     return b;
   }
@@ -168,7 +188,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return 0;
     }
-    final b = _file.readUint24(_fileOffset + _position, _fileSize);
+    final b = _file.readUint24(_fileOffset + _position);
     _position += 3;
     return b;
   }
@@ -179,7 +199,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return 0;
     }
-    final b = _file.readUint32(_fileOffset + _position, _fileSize);
+    final b = _file.readUint32(_fileOffset + _position);
     _position += 4;
     return b;
   }
@@ -190,7 +210,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return 0;
     }
-    final b = _file.readUint64(_fileOffset + _position, _fileSize);
+    final b = _file.readUint64(_fileOffset + _position);
     _position += 8;
     return b;
   }
@@ -214,7 +234,7 @@ class InputFileStream extends InputStream {
     if (isEOS) {
       return Uint8List(0);
     }
-    return _file.readBytes(_fileOffset + position, fileRemaining, _fileSize);
+    return _file.readBytes(_fileOffset + position, fileRemaining);
   }
 
   FileBuffer get file => _file;

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:archive/src/util/output_memory_stream.dart';
 
+import '../../util/archive_exception.dart';
 import '../../util/file_content.dart';
 import '../../util/input_stream.dart';
 import '../../util/output_stream.dart';
@@ -40,6 +41,10 @@ class TarFile {
   static const String directory = '5';
   static const String fifo = '6';
   static const String contFile = '7';
+  // GNU headers whose content is the next entry's name, or the next entry's
+  // link target, when it doesn't fit the 100 byte field.
+  static const String longName = 'L';
+  static const String longLinkName = 'K';
   // global extended header with meta data (POSIX.1-2001)
   static const String gExHeader = 'g';
   static const String gExHeader2 = 'G';
@@ -47,6 +52,11 @@ class TarFile {
   // (POSIX.1-2001)
   static const String exHeader = 'x';
   static const String exHeader2 = 'X';
+
+  /// The widest magnitude a base-256 numeric header field is written or read
+  /// with: 2^53-1, the largest integer exact on every platform. A tar field
+  /// can hold more, but it would not survive the trip through an int.
+  static const int maxNumericField = 9007199254740991;
 
   // Pre-POSIX Format
   late String filename; // 100 bytes
@@ -71,7 +81,10 @@ class TarFile {
 
   TarFile();
 
-  TarFile.read(InputStream input, {bool storeData = true, Encoding? encoding}) {
+  /// Reads an entry from [input]. [size] is the size given by a preceding
+  /// PAX header, which overrides the one in this entry's own header.
+  TarFile.read(InputStream input,
+      {bool storeData = true, Encoding? encoding, int? size}) {
     final header = input.readBytes(512);
 
     // The name, linkname, magic, uname, and gname are null-terminated
@@ -101,7 +114,33 @@ class TarFile {
       }
     }
 
-    if (storeData || filename == '././@LongLink') {
+    final isMetadata = filename == '././@LongLink' ||
+        typeFlag == longName ||
+        typeFlag == longLinkName ||
+        typeFlag == exHeader ||
+        typeFlag == exHeader2 ||
+        typeFlag == gExHeader ||
+        typeFlag == gExHeader2;
+
+    // A pax size record describes the entry it precedes, not the metadata
+    // headers that may sit in between. Applying it to one of those would read
+    // the wrong number of bytes and leave the stream mid-header.
+    if (size != null && !isMetadata) {
+      fileSize = size;
+    }
+    // A size field can hold a negative number, which no entry can have.
+    if (fileSize < 0) {
+      throw ArchiveException('Invalid tar file size: $fileSize');
+    }
+
+    // The decoder needs the content of the headers that carry the next
+    // entry's metadata, even when it isn't storing file data.
+    if (storeData ||
+        filename == '././@LongLink' ||
+        typeFlag == longName ||
+        typeFlag == longLinkName ||
+        typeFlag == exHeader ||
+        typeFlag == exHeader2) {
       _rawContent = input.readBytes(fileSize);
     } else {
       input.skip(fileSize);
@@ -124,12 +163,14 @@ class TarFile {
   InputStream? get rawContent => _rawContent;
 
   FileContent? get content {
-    if (_rawContent == null) {
-      return null;
+    // What was set, or what was read, whichever there is
+    if (_content == null && _rawContent != null) {
+      _content = FileContentMemory(_rawContent!.toUint8List());
     }
-    _content ??= FileContentMemory(_rawContent!.toUint8List());
     return _content;
   }
+
+  set content(FileContent? data) => _content = data;
 
   Uint8List? get contentBytes => content?.readBytes();
 
@@ -191,10 +232,12 @@ class TarFile {
 
     output.writeBytes(header.getBytes());
 
+    // Through a subset, so that writing never moves the position of the
+    // stream the entry was given: a file output reads it in chunks
     if (_content != null) {
-      output.writeStream(_content!.getStream());
+      output.writeStream(_content!.getStream().subset());
     } else if (_rawContent != null) {
-      output.writeStream(_rawContent!);
+      output.writeStream(_rawContent!.subset());
     }
 
     if (isFile && fileSize > 0) {
@@ -209,7 +252,39 @@ class TarFile {
   }
 
   int _parseInt(InputStream input, int numBytes) {
-    var s = _parseString(input, numBytes);
+    final bytes = input.readBytes(numBytes).toUint8List();
+
+    // GNU tar stores values that don't fit the octal field, such as the size
+    // of a file of 8GB or more, in base 256: the high bit of the first byte
+    // marks the encoding, and the rest is a big endian two's complement
+    // integer, with a set bit 0x40 meaning the value is negative.
+    if (bytes.isNotEmpty && (bytes[0] & 0x80) != 0) {
+      final inv = (bytes[0] & 0x40) != 0 ? 0xff : 0x00;
+      var x = 0;
+      for (var i = 0; i < bytes.length; ++i) {
+        var c = bytes[i] ^ inv;
+        if (i == 0) {
+          c &= 0x7f;
+        }
+        // The field is wide enough for 88 bits, more than an int holds, and
+        // a value that doesn't fit would come back as something unrelated
+        // rather than as an error, so refuse anything wider than
+        // maxNumericField. Checked before the multiply, so the bound is
+        // divided by the base.
+        // Built by arithmetic rather than shifts, because on the web an int
+        // is a double and the bitwise operators there are 32 bit.
+        if (x > maxNumericField ~/ 256) {
+          throw ArchiveException('Tar header field is out of range');
+        }
+        x = x * 256 + c;
+      }
+      return inv == 0xff ? -x - 1 : x;
+    }
+
+    // Otherwise the field is a null or space terminated octal number.
+    final end = bytes.indexOf(0);
+    final s =
+        String.fromCharCodes(bytes.sublist(0, end < 0 ? null : end)).trim();
     if (s.isEmpty) {
       return 0;
     }
@@ -249,6 +324,29 @@ class TarFile {
 
   void _writeInt(OutputStream output, int value, int numBytes) {
     var s = value.toRadixString(8);
+    // Too wide for the octal field: base 256, which _parseInt reads back
+    // Switched a digit later than GNU tar, because digits with no terminator
+    // are read by older versions of this package and base 256 is not
+    if (value < 0 || s.length > numBytes) {
+      final bytes = Uint8List(numBytes);
+      var m = value < 0 ? -value - 1 : value;
+      // The same bound _parseInt reads back to, so wider is refused on both
+      // sides
+      if (m > maxNumericField) {
+        throw ArchiveException('Tar header field is out of range: $value');
+      }
+      for (var i = numBytes - 1; i >= 0; --i) {
+        bytes[i] = value < 0 ? 255 - (m % 256) : m % 256;
+        m = m ~/ 256;
+      }
+      // Bits 0x80 and 0x40 of the first byte are the marker and the sign
+      if (m != 0 || (value < 0 ? bytes[0] < 0xc0 : bytes[0] >= 0x40)) {
+        throw ArchiveException('Tar header field is out of range: $value');
+      }
+      bytes[0] |= 0x80;
+      output.writeBytes(bytes);
+      return;
+    }
     while (s.length < numBytes - 1) {
       s = '0$s';
     }

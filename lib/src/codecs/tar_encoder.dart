@@ -41,17 +41,39 @@ class TarEncoder {
       return;
     }
 
-    // GNU tar files store extra long file names in a separate file
-    if (entry.name.length > 100) {
+    // GNU tar files store extra long file names in a separate file. Long in
+    // bytes as encoded, which is what the header field holds, and the size
+    // of the separate file
+    final name = filenameEncoding.encode(entry.name);
+    if (name.length > 100) {
       final ts = TarFile();
       ts.filename = '././@LongLink';
-      ts.fileSize = entry.name.length;
+      // What other tars key on: the name alone is only read back by this one
+      ts.typeFlag = TarFile.longName;
+      ts.fileSize = name.length;
       ts.mode = 0;
       ts.ownerId = 0;
       ts.groupId = 0;
       ts.lastModTime = 0;
-      ts.contentBytes = castToUint8List(utf8.encode(entry.name));
-      ts.write(_outputStream!);
+      ts.contentBytes = castToUint8List(name);
+      ts.write(_outputStream!, filenameEncoder: filenameEncoding);
+    }
+
+    // After the name, which is the order GNU writes the two in
+    if (entry.isSymbolicLink) {
+      final link = filenameEncoding.encode(entry.symbolicLink!);
+      if (link.length > 100) {
+        final ts = TarFile();
+        ts.filename = '././@LongLink';
+        ts.typeFlag = TarFile.longLinkName;
+        ts.fileSize = link.length;
+        ts.mode = 0;
+        ts.ownerId = 0;
+        ts.groupId = 0;
+        ts.lastModTime = 0;
+        ts.contentBytes = castToUint8List(link);
+        ts.write(_outputStream!, filenameEncoder: filenameEncoding);
+      }
     }
 
     final ts = TarFile();
@@ -64,15 +86,22 @@ class TarEncoder {
       ts.typeFlag = TarFile.directory;
     } else {
       final file = entry;
-      if (file.symbolicLink != null) {
+      if (file.isSymbolicLink) {
         ts.typeFlag = TarFile.symbolicLink;
         ts.nameOfLinkedFile = file.symbolicLink;
       } else {
         ts.fileSize = file.size;
-        ts.contentBytes = file.getContent()?.toUint8List();
+        // As stored: write copies a stream in chunks, where getContent would
+        // read the whole entry into memory first
+        final raw = file.rawContent;
+        if (raw != null && !raw.isCompressed) {
+          ts.content = raw;
+        } else {
+          ts.contentBytes = file.getContent()?.toUint8List();
+        }
       }
     }
-    ts.write(_outputStream!);
+    ts.write(_outputStream!, filenameEncoder: filenameEncoding);
   }
 
   void finish() {

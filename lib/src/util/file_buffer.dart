@@ -13,7 +13,10 @@ class FileBuffer {
   Uint8List? _buffer;
   int _fileSize = 0;
   int _position = 0;
+  // The size of the buffer, and how much of it holds bytes of the file: less
+  // than the size after a read near the end of the file
   int _bufferSize = 0;
+  int _bufferLength = 0;
 
   /// The buffer size should be at least 8 bytes, so reading a 64-bit value
   /// doesn't have to deal with buffer overflow.
@@ -41,17 +44,17 @@ class FileBuffer {
       kMinBufferSize,
     );
     _buffer = Uint8List(_bufferSize);
-    _readBuffer(0, _fileSize);
+    _readBuffer(0);
   }
 
   FileBuffer.from(FileBuffer other, {int? bufferSize})
       : this.byteOrder = other.byteOrder,
         this.file = other.file {
-    _bufferSize = bufferSize ?? other._bufferSize;
+    _bufferSize = max(bufferSize ?? other._bufferSize, kMinBufferSize);
     _position = other._position;
     _fileSize = other._fileSize;
     _buffer = Uint8List(_bufferSize);
-    _readBuffer(_position, _bufferSize);
+    _readBuffer(_position);
   }
 
   /// The length of the file in bytes.
@@ -70,7 +73,7 @@ class FileBuffer {
     }
     if (_buffer == null) {
       _buffer = Uint8List(_bufferSize);
-      _readBuffer(_position, _bufferSize);
+      _readBuffer(_position);
     }
     return _buffer!;
   }
@@ -93,26 +96,28 @@ class FileBuffer {
   }
 
   /// Read an 8-bit unsigned int at the given [position] within the file.
-  /// [fileSize] is used to ensure bytes aren't read past the end of
-  /// an [InputFileStream].
-  int readUint8(int position, [int? fileSize]) {
+  ///
+  /// The [fileSize] of the read methods is ignored: the buffer never reads
+  /// past the end of the file, and a stream over part of the file keeps to
+  /// its own bounds.
+  int readUint8(int position, [@Deprecated('Ignored') int? fileSize]) {
     if (position >= _fileSize || position < 0) {
       return 0;
     }
-    if (position < _position || position >= (_position + _bufferSize)) {
-      _readBuffer(position, fileSize ?? _fileSize);
+    if (position < _position || position >= (_position + _bufferLength)) {
+      _readBuffer(position);
     }
     final p = position - _position;
     return _buffer![p];
   }
 
   /// Read a 16-bit unsigned int at the given [position] within the file.
-  int readUint16(int position, [int? fileSize]) {
-    if (position >= (_fileSize - 2) || position < 0) {
+  int readUint16(int position, [@Deprecated('Ignored') int? fileSize]) {
+    if (position > (_fileSize - 2) || position < 0) {
       return 0;
     }
-    if (position < _position || position >= (_position + (_bufferSize - 2))) {
-      _readBuffer(position, fileSize ?? _fileSize);
+    if (position < _position || position + 2 > (_position + _bufferLength)) {
+      _readBuffer(position);
     }
     var p = position - _position;
     final b1 = _buffer![p++];
@@ -124,12 +129,12 @@ class FileBuffer {
   }
 
   /// Read a 24-bit unsigned int at the given [position] within the file.
-  int readUint24(int position, [int? fileSize]) {
-    if (position >= (_fileSize - 3) || position < 0) {
+  int readUint24(int position, [@Deprecated('Ignored') int? fileSize]) {
+    if (position > (_fileSize - 3) || position < 0) {
       return 0;
     }
-    if (position < _position || position >= (_position + (_bufferSize - 3))) {
-      _readBuffer(position, fileSize ?? _fileSize);
+    if (position < _position || position + 3 > (_position + _bufferLength)) {
+      _readBuffer(position);
     }
     var p = position - _position;
     final b1 = _buffer![p++];
@@ -142,12 +147,12 @@ class FileBuffer {
   }
 
   /// Read a 32-bit unsigned int at the given [position] within the file.
-  int readUint32(int position, [int? fileSize]) {
-    if (position >= (_fileSize - 4) || position < 0) {
+  int readUint32(int position, [@Deprecated('Ignored') int? fileSize]) {
+    if (position > (_fileSize - 4) || position < 0) {
       return 0;
     }
-    if (position < _position || position >= (_position + (_bufferSize - 4))) {
-      _readBuffer(position, fileSize ?? _fileSize);
+    if (position < _position || position + 4 > (_position + _bufferLength)) {
+      _readBuffer(position);
     }
     var p = position - _position;
     final b1 = _buffer![p++];
@@ -161,12 +166,12 @@ class FileBuffer {
   }
 
   /// Read a 64-bit unsigned int at the given [position] within the file.
-  int readUint64(int position, [int? fileSize]) {
-    if (position >= (_fileSize - 8) || position < 0) {
+  int readUint64(int position, [@Deprecated('Ignored') int? fileSize]) {
+    if (position > (_fileSize - 8) || position < 0) {
       return 0;
     }
-    if (position < _position || position >= (_position + (_bufferSize - 8))) {
-      _readBuffer(position, fileSize ?? _fileSize);
+    if (position < _position || position + 8 > (_position + _bufferLength)) {
+      _readBuffer(position);
     }
     var p = position - _position;
     final b1 = _buffer![p++];
@@ -199,7 +204,8 @@ class FileBuffer {
   }
 
   /// Read [count] bytes starting at the given [position] within the file.
-  Uint8List readBytes(int position, int count, [int? fileSize]) {
+  Uint8List readBytes(int position, int count,
+      [@Deprecated('Ignored') int? fileSize]) {
     if (count > buffer.length) {
       if (position + count >= _fileSize) {
         count = _fileSize - position;
@@ -211,8 +217,8 @@ class FileBuffer {
     }
 
     if (position < _position ||
-        (position + count) >= (_position + _bufferSize)) {
-      _readBuffer(position, fileSize ?? _fileSize);
+        (position + count) > (_position + _bufferLength)) {
+      _readBuffer(position);
     }
 
     final start = position - _position;
@@ -220,7 +226,7 @@ class FileBuffer {
     return bytes;
   }
 
-  void _readBuffer(int position, int fileSize) {
+  void _readBuffer(int position) {
     if (!file.isOpen) {
       file.open();
     }
@@ -228,8 +234,10 @@ class FileBuffer {
       _buffer = Uint8List(_bufferSize);
     }
     file.position = position;
-    final size = min(fileSize, _buffer!.length);
-    _bufferSize = file.readInto(_buffer!, size);
+    // Fill the buffer, not just the bytes the read asked for, so that every
+    // later read within it is a hit
+    final size = max(0, min(_fileSize - position, _bufferSize));
+    _bufferLength = file.readInto(_buffer!, size);
     _position = position;
   }
 }

@@ -1,137 +1,257 @@
-## 4.0.9 - February 17, 2026
+# 4.3.0
 
-- Fix extractFileToDisk file extension handling, where foo.bar.zip would fail.
-- 
+* Added multithreaded decoding to XZDecoder. Passing an `XZMultithreadOptions`
+  to `decodeBytes` or `decodeStream` spreads the work over isolates, one xz
+  block per job, and reports the result through its `onDone` callback. Both
+  methods behave exactly as before when it is omitted. On a 1.1 GB archive of
+  six blocks: 16.1 s single threaded, 8.0 s on the default three workers,
+  5.0 s on six.
+* `decodeStream` reading from an `InputFileStream` now lets each worker read
+  its own block straight from disk, so the compressed archive never passes
+  through the calling isolate. Decoding a 1.1 GB archive to an
+  `OutputFileStream` peaks at 1.8 GB, below the 3.0 GB the single threaded
+  path uses, while being twice as fast.
+* Multithreaded decoding falls back to the single threaded path on the web,
+  where there are no isolates, and the isolate machinery is tree-shaken out of
+  web builds entirely.
+* Added `InputFileStream.fileBuffer`, `fileOffset` and `fileLength`.
+* Added `--x86` flag support to XZDecoder
+* Improved verify: true speed for XZDecoder
+* Improved overall decode speed for XZDecoder
+* Decreased RAM usage for XZDecoder
+* Added concatenated streams support for XZDecoder
+* Added crc64 wasm support (`verify: true`)
+* Added `uncompressedSize` getter for XZDecoder, returning the original file
+  size before compression.
+* Fix: pb=4 flag range error in XZDecoder
+* Fix: padding for _streamStart in XZDecoder
+* Added `throwOnError` to `XZDecoder.decodeBytes` and `decodeStream`. Without
+  it a malformed or
+  truncated archive still returns the partial output with nothing to say it is
+  not the whole file, which was the only decode with no way at all to report a
+  failure. In multithreaded mode the exception is delivered to
+  `XZMultithreadOptions.onError`, and setting `throwOnError` without an
+  `onError` is now refused rather than losing the failure.
+* Fix: a corrupt xz block lost the part of itself that had already decoded when
+  `verify: true` was used with an output that cannot be read back, such as an
+  `OutputFileStream` or any multithreaded decode. The output now stops in the
+  same place whichever way the decode was asked for.
+* Added `XZDecoder.maxPreallocateSize`, capping how large an output buffer is
+  allocated from a size the archive itself declares. Defaults to
+  `xzDefaultMaxPreallocateSize`, 2 GB natively and 256 MB on the web.
+* Added `XZMultithreadOptions.fileReadBufferSize`.
+* Fix: an `xz --check=none` archive with corrupt blocks passed `verify: true`.
+* Fix: the xz block header reader trusted its own fields, accepting an
+  unterminated multibyte integer, a filter properties length past the end of
+  the header, empty delta or LZMA2 properties, and a bad stream header or
+  footer CRC.
+* Fix: the zip End of Central Directory record was missed when its signature
+  straddled a chunk of the backwards search, or sat within the last 21 bytes of
+  the file, so a valid archive could decode as empty.
+* `TarDecoder` with `verify: true` now checks each header's own checksum and
+  throws `ArchiveException` on a mismatch.
+* Fix: GNU base-256 numeric tar header fields were read as octal, so sizes of
+  8 GB or more and large uid, gid and mtime values decoded as garbage.
+* Fix: tar PAX extended headers are walked by each record's declared length
+  instead of split on newlines, so a record holding binary no longer corrupts
+  the rest of the header.
+* Fix: a PAX `size` record was applied to the metadata headers following it
+  rather than to the entry it describes.
+* Fix: a GNU `././@LongLink` header of type `K` set the next entry's name
+  instead of its symlink target.
+* Fix: `storeData: false` skipped the tar long name and PAX headers along with
+  the file data, losing the names they carry.
+* Fix: a negative size in a tar header is refused instead of read as an entry.
+* Fix: with `verify: true` the end of a tar is a full 512 byte zero block, which
+  two zero bytes could not be told apart from a damaged header. A tail shorter
+  than a header block now ends the archive instead of decoding as junk.
+* Fix: tar base-256 fields wider than `TarFile.maxNumericField` are refused on
+  read and write instead of overflowing silently.
+* Fix: decoded regular tar files were given an empty link name and re-encoded
+  as symlinks.
+* Fix: long tar names and symlink targets were written without the `L` and `K`
+  type flags, so other tar implementations truncated them to 100 bytes, and
+  long symlink targets were not written at all.
+* Fix: the GNU long name record was sized in characters rather than encoded
+  bytes and ignored `filenameEncoding`.
+* Fix: encoding a tar entry consumed the stream it was given, so a second
+  encode of the same archive wrote empty entries.
+* Fix: tar values too wide for the octal header field are written in GNU
+  base-256 form instead of producing a corrupt header.
+* `TarEncoder` copies a stored stream through in chunks rather than reading the
+  whole entry into memory.
+* `TarFile.content` is now settable and reads back what was set.
+* Fix: `GZipDecoder.decodeStream` returned true for a truncated or corrupt
+  archive, silently losing files.
+* Fix: the web gzip decoder never checked the member CRC32 despite
+  `verify: true`.
+* Fix: the web gzip header reader trusted its own length fields, reading past
+  the end on a damaged extra field, an unterminated name or comment, or a
+  header under ten bytes.
+* Fix: a gzip input under 20 bytes had header bytes read as a trailer.
+* The native gzip decoder now reads in 8 KB chunks instead of 1 KB.
+* Fix: an incomplete Huffman code table entry consumed no bits and looped
+  forever, and a code length repeat past the end of the table indexed out of
+  range.
+* Fix: an Inflate back-reference distance reaching past everything written
+  indexed behind the output buffer.
+* Fix: the web zlib decoder read its two byte header without checking two bytes
+  were there.
+* Fix: a short read near the end of a file overwrote the buffer's size with the
+  bytes read, so every later read missed the cache and went back to disk.
+* Fix: multi-byte `FileBuffer` reads refilled the cache one byte early, costing
+  a re-read on every buffer-aligned access.
+* Fix: `InputFileStream.subset` did not clamp its length to what remains of the
+  source, so peeking past the end returned stale bytes.
+* Deprecated the `fileSize` parameter of the `FileBuffer` read methods, which
+  is ignored.
 
-## 4.0.8 - February 16, 2026
 
-- Remove dependency to crypto package
-- Removed Adler32 and Crc32 classes
-- Fix: extractArchiveToDisk extensions should be case insensitive.
-- Fix: extractFileToDisk for .tar.gz files
-- Add ZipFileEncoder.addDirectorySync
-- Always use posix separators for ZipFileEncoder
+# 4.2.0
 
-## 4.0.7 - April 22, 2025
+* Optimize performance and issues with large files with XZDecoder.
 
-- Change posix dependency to 6.0.2.
+# 4.1.0
 
-## 4.0.6 - April 17, 2025
+* Fix: RangeError when parsing ZIP extra fields with trailing bytes.
+* Optimize LZ77 decode
+* Fix: issue with file_buffer preventing last value
+* Fix: invalid path separator in zip content compression
 
-- Fix zip decoding when the last file of the archive is also a zip.
-- Add lastModifiedDateTime to ArchiveFile
-- Fix Archive files and fileMap getting out of sync after calling removeFile
+# 4.0.9
 
-## 4.0.5 - March 23, 2025
+* Fix extractFileToDisk file extension handling, where foo.bar.zip would fail.
+* 
 
-- Improve performance of OutputFileStream.
-- Add ArchiveFile.noCompress, which had been removed from the 3.x to 4.x update.
-- GZipDecoder should fall back to ZLib if there is no GZip header.
+# 4.0.8
 
-## 4.0.4 - February 28, 2025
+* Remove dependency to crypto package
+* Removed Adler32 and Crc32 classes
+* Fix: extractArchiveToDisk extensions should be case insensitive.
+* Fix: extractFileToDisk for .tar.gz files
+* Add ZipFileEncoder.addDirectorySync
+* Always use posix separators for ZipFileEncoder
 
-- Fix level argument for ZipEncoder.add method.
-- Fix ArchiveFile.compression to work for controlling compression method used encoding zips.
-- Add ArchiveFile.compression CompressionType.bzip2 compression mode support.
-- Add ArchiveFile.compressionLevel to work for controlling compression level used for encoding zips.
+# 4.0.7
 
-## 4.0.3 - February 21, 2025
+* Change posix dependency to 6.0.2.
 
-- Fix potential infinite loop when parsing zip headers.
-- Update conditional imports to be compatible with WASM.
-- Add addFileSync to ZipFileEncoder for synchronous call to addFile.
+# 4.0.6
 
-## 4.0.2 - December 19, 2024
+* Fix zip decoding when the last file of the archive is also a zip.
+* Add lastModifiedDateTime to ArchiveFile
+* Fix Archive files and fileMap getting out of sync after calling removeFile
 
-- Reduce SDK min version to 3.0.
-- Fix import error with js_interop.
+# 4.0.5
 
-## 4.0.1 - December 7, 2024
+* Improve performance of OutputFileStream.
+* Add ArchiveFile.noCompress, which had been removed from the 3.x to 4.x update.
+* GZipDecoder should fall back to ZLib if there is no GZip header.
 
-- Fix error with GZip encoder for web builds.
+# 4.0.4
 
-## 4.0.0 - December 7, 2024
+* Fix level argument for ZipEncoder.add method.
+* Fix ArchiveFile.compression to work for controlling compression method used encoding zips.
+* Add ArchiveFile.compression CompressionType.bzip2 compression mode support.
+* Add ArchiveFile.compressionLevel to work for controlling compression level used for encoding zips.
 
-- Major cleanup of the code, includes potential breaking changes.
-  - **decodeBuffer** has been renamed to **decodeStream** in the various decoder classes.
-  - **InputStream** has been renamed to **InputMemoryStream**.
-  - **OutputStream** has been renamed to **OutputMemoryStream**.
+# 4.0.3
 
-## 3.6.1 - May 31, 2024
+* Fix potential infinite loop when parsing zip headers.
+* Update conditional imports to be compatible with WASM.
+* Add addFileSync to ZipFileEncoder for synchronous call to addFile.
 
-- Fix ArchiveFile.rawContent returning null after decoding a zip.
+# 4.0.2
 
-## 3.6.0 - May 22, 2024
+* Reduce SDK min version to 3.0.
+* Fix import error with js_interop.
+
+# 4.0.1
+
+* Fix error with GZip encoder for web builds.
+
+# 4.0.0
+
+* Major cleanup of the code, includes potential breaking changes.
+  * **decodeBuffer** has been renamed to **decodeStream** in the various decoder classes.
+  * **InputStream** has been renamed to **InputMemoryStream**.
+  * **OutputStream** has been renamed to **OutputMemoryStream**.
+
+# 3.6.1
+
+* Fix ArchiveFile.rawContent returning null after decoding a zip.
+
+# 3.6.0
 
 * Fix zip encoding when a file was previously decoded.
 * Fix decoding zips with password when using InputFileStream.
 * ZipEncoder.encode autoClose now defaults to false.
 
-## 3.5.1 - May 3, 2024
+# 3.5.1
 
 * Re-add zipPath to ZipFileEncoder.
 
-## 3.5.0 - April 26, 2024
+# 3.5.0
 
 * Remove dependency to pointycastle package
 * Use utf8 encoding for string data
 * Fixes for encrypted zip encoding
 * Async and sync versions of extractArchiveToDisk
 
-## 3.4.10 - January 2, 2024
+# 3.4.10
 
 * Fix ZipCrypto decryption
 
-## 3.4.9 - November 7, 2023
+# 3.4.9
 
 * Revert breaking change for extractArchiveToDisk becoming async;
 add extractArchiveToDiskAsync for the async version.
 
-## 3.4.8 - November 5, 2023
+# 3.4.8
 
 * Improve zip decompression performance with dart:io by using native ZLib decompression when possible.
 
-## 3.4.7 - November 4, 2023
+# 3.4.7
 
 * Improve performance by not using List.setRange for copying bytes, which turns out to be very slow.
 
-## 3.4.6 - October 10, 2023
+# 3.4.6
 
 * Fix for Zip64 file size causing memory errors. 
 
-## 3.4.5 - October 01, 2023
+# 3.4.5
 
 * Rewrote InputFileStream to reduce overall memory by using a shared file cache.
 * Added `DateTime lastModDateTime` getter to ArchiveFile.
 * Add support for zip encryption.
 
-## 3.4.4
+# 3.4.4
 
 * Fix for new default buffer size for InputFileStream consuming too much memory for large archives.
 
-## 3.4.3 - September 28, 2023
+# 3.4.3
 
 * Fix bug in InputFileStream that caused it to only have an 8-byte buffer, making file streaming slow.
 * Increase the default buffer size for file I/O streams to 1MB.
 * Update pubspec dependency versions.
 
-## 3.4.2 - September 23, 2023
+# 3.4.2
 
 * Add bzip2 decompression for zip files.
 
-## 3.4.1 - September 23, 2023
+# 3.4.1
 
 * Fix for decoding zip64 zip files that have multiple extra fields.
 
-## 3.4.0 - September 21, 2023
+# 3.4.0
 
 * Add Zip64 support to ZipEncoder to allow it to create zip files > 4GB.
 
-## 3.3.9 - September 10, 2023
+# 3.3.9
 
 * Fix for extractFileToDisk causing corrupt files by closing a file stream before it finished writing. 
 
-## 3.3.8 - September 02, 2023
+# 3.3.8
 
 * Fix for zip security issue with symlinks, https://github.com/brendan-duncan/archive/issues/265. https://osv.dev/vulnerability/GHSA-9v85-q87q-g4vg.
 * Fix for zip security issue with file paths, https://github.com/brendan-duncan/archive/issues/266. https://osv.dev/vulnerability/GHSA-r285-q736-9v95.
@@ -139,37 +259,37 @@ add extractArchiveToDiskAsync for the async version.
 * Don't allow tar files to include absolute paths.
 * Fix error decoding AES-192.
 
-## 3.3.7 - April 01, 2023
+# 3.3.7
 
 * Add Zip AES-256 decryption
 * Fix symlink encoding for tar files
 
-## 3.3.6 - January 27, 2023
+# 3.3.6
 
 * Fix errors decoding XZ files.
 
-## 3.3.5 - November 22, 2022
+# 3.3.5
 
 * Fix file content when decoding zips
 
-## 3.3.4 - November 11, 2022
+# 3.3.4
 
 * Fix analysis errors.
 
-## 3.3.3 - November 11, 2022
+# 3.3.3
 
 * Support symlinks in ZIP archives
 * Fix ZIP decryption for ZipCrypto format 
 
-## 3.3.2 - October 16, 2022
+# 3.3.2
 
 * Fix for UTF-8 file name caused problem on Windows.
 
-## 3.3.1 - July 19, 2022
+# 3.3.1
 
 * Fix for Inflate crashing on some compressed files.
 
-## 3.3.0 - March 25, 2022
+# 3.3.0
 
 * IO encoders (ZipFileEncoder, TarFileEncoder), will now include directories and empty directories.
 * Fix for ZipEncoder file lastModTime.
@@ -177,203 +297,203 @@ add extractArchiveToDiskAsync for the async version.
 * Add PAX format to tar decoder.
 * Make more file operations async. 
 
-## 3.2.2 - March 09, 2022
+# 3.2.2
 
 * Re-add List<int> content data for ArchiveFile.
 * Add String and TypedData (Int32List, Float32List, etc) content data for ArchiveFile. 
 
-## 3.2.1 - February 17, 2022
+# 3.2.1
 
 * Added buffer to OutputFileStream to improve performance by reducing the number of file writes.
 
-## 3.2.0 - February 12, 2022
+# 3.2.0
 
 * For non-web applications, use native 'inflate' decompression when decompressing zip files.
 * Add asyncWrite option to extractArchiveToDisk and extractFileToDisk, moving file write operations to be async.
 * ArchiveFile.writeContent will release its memory after the data has been written, reducing overall memory usage.
 * Add clear method to ArchiveFile, clearing any decompressed data memory it's storing.
 
-## 3.1.11 - January 29, 2022
+# 3.1.11
 
 * Fix indexing bug in Archive.addFile. 
 
-## 3.1.10 - January 29, 2022
+# 3.1.10
 
 * Fix performance regression with Archive.
 
-## 3.1.9 - January 19, 2022
+# 3.1.9
 
 * Fix FileInputStream to work with ZipDecoder.
 
-## 3.1.8 - January 01, 2022
+# 3.1.8
 
 * Catch invalid UTF8 string decoding.
 
-## 3.1.7 - January 01, 2022
+# 3.1.7
 
 * Fix for UTF8 filenames
 
-## 3.1.6 - October 11, 2021
+# 3.1.6
 
 * Fix problem with non-terminating long filenames.
 * File modification dates were incorrectly stored in milliseconds instead of seconds.
 
-## 3.1.5 - September 29, 2021
+# 3.1.5
 
 * Disable XZ format CRC64 for html builds to fix errors.
 
-## 3.1.4 - September 29, 2021
+# 3.1.4
 
 * Changed LICENSE to MIT.
  
-## 3.1.3 - September 29, 2021
+# 3.1.3
 
 * Cleaned up LICENSE, moving other licenses to LICENSE-other.md.
 
-## 3.1.2
+# 3.1.2
 
 * Added the ability to override the timestamp encoded in a Zip file.
 
-## 3.1.1
+# 3.1.1
 
 * Fix zip encoder so that zip files created on Windows will open correctly on Linux.
 
-## 3.1.0-dev
+# 3.1.0-dev
 
 * Added `const` constructors to `ZLibDecoder`, `ZLibEncoder`, and 
   `ZLibDecoderBase`.
 
-## 3.0.0 - February 3, 2021
+# 3.0.0
 
 * Stable release supporting null safety.
 
-## 3.0.0-nullsafety.0 - January 20, 2021
+# 3.0.0-nullsafety.0
 
 * Migrate to null safety.
 
-## 2.0.13 - January 02, 2020
+# 2.0.13
 
 * Switch to dart strong mode; refactor code to resolve all dartanalyzer warnings.
 
-## 2.0.12 - December 30, 2019
+# 2.0.12
 
 * Fix dartanalyzer warnings
 
-## 2.0.11 - November 8, 2019
+# 2.0.11
 
 * Set the default permission for ArchiveFile to something more reasonable (0644 -rw-r--r--)
 
-## 2.0.10 - June 11, 2019
+# 2.0.10
 
 * Fix for decoding empty zip files.
 
-## 2.0.9 - May 16, 2019
+# 2.0.9
 
 * Add isSymbolicLink and nameOfLinkedFile to ArchiveFile.
 * Fix for encoding empty files.
 
-## 2.0.8
+# 2.0.8
 
 * Fix zip isFile
 
-## 2.0.7
+# 2.0.7
 
 * Fix zip file attributes.
 
-## 2.0.6
+# 2.0.6
 
 * Support GNU tar long file names
 * Maintain unix file permissions in zip archives.
 
-## 2.0.5
+# 2.0.5
 
 * Use dart:io ZLibCodec when run from dart:io.
 
-## 2.0.4
+# 2.0.4
 
 * Fix InputStream when a Uint8ListView is used as input data.
 
-## 2.0.3
+# 2.0.3
 
 * Use Utf8 for reading strings in archive archive files, for filenames and comments.
 
-## 2.0.2
+# 2.0.2
 
 * Fixes for ZipFileEncoder.
 
-## 2.0.1
+# 2.0.1
 
 * Remove the use of `part` and `part of` in the main library.
 * Added ZipFileEncoder to encode files and directories using dart:io.
 * Added createArchiveFromDirectory function to create an Archive object from a dart:io Directory.
 
-## 2.0.0
+# 2.0.0
 
 * Moved version up for Dart 2 support.
 * Fixed an issue with file compression flags when decoding zip archives.
 * Fixed an issue with bzip2 decoding in production code.
 
-## 1.0.33
+# 1.0.33
 
 * Support the latest version of `package:args`.
 
-## 1.0.30 - May 27, 2017
+# 1.0.30
 
-- Add archive_io sub-package for supporting file streaming rather than storing everything in memory.
+* Add archive_io sub-package for supporting file streaming rather than storing everything in memory.
   **This is a work-in-progress and under development.**
 
-## 1.0.29 - May 25, 2017
+# 1.0.29
 
-- Fix issue with POSIX tar files.
-- Upgrade dependency on `archive` to `>=1.0.0 <2.0.0`
+* Fix issue with POSIX tar files.
+* Upgrade dependency on `archive` to `>=1.0.0 <2.0.0`
 
-## 1.0.20 - Jun2 21, 2015
+# 1.0.20
 
-- Improve performance decompressing large files in zip archives.
+* Improve performance decompressing large files in zip archives.
 
-## 1.0.19 - February 23, 2014
+# 1.0.19
 
-- Disable CRC verification by default when decoding archives.
+* Disable CRC verification by default when decoding archives.
 
-## 1.0.18 - October 09, 2014
+# 1.0.18
 
-- Add support for encoding uncompressed files in zip archives.
+* Add support for encoding uncompressed files in zip archives.
 
-## 1.0.17 - April 25, 2014
+# 1.0.17
 
-- Fix a bug in InputStream.
+* Fix a bug in InputStream.
 
-## 1.0.16 - March 02, 2014
+# 1.0.16
 
-- Add stream support to Inflate decompression.
+* Add stream support to Inflate decompression.
 
-## 1.0.15 - February 16, 2014
+# 1.0.15
 
-- Improved performance when writing large blocks.
+* Improved performance when writing large blocks.
 
-## 1.0.14 - February 12, 2014
+# 1.0.14
 
-- Misc updates and fixes.
+* Misc updates and fixes.
 
-## 1.0.13 - February 06, 2014
+# 1.0.13
 
-- Added BZip2 encoder.
+* Added BZip2 encoder.
 
-- *BREAKING CHANGE*: `File` was renamed to `ArchiveFile`, to avoid conflicts with
+* *BREAKING CHANGE*: `File` was renamed to `ArchiveFile`, to avoid conflicts with
   `dart:io`.
 
-## 1.0.12 - February 04, 2014
+# 1.0.12
 
-- Added BZip2 decoder.
+* Added BZip2 decoder.
 
-## 1.0.11 - February 02, 2014
+# 1.0.11
 
-- Changed `InputStream` to work with typed_data instead of `List<int>`, should
+* Changed `InputStream` to work with typed_data instead of `List<int>`, should
   reduce memory and increase performance.
 
-## 1.0.10 - January 19, 2013
+# 1.0.10
 
-- Renamed `InputBuffer` and `OutputBuffer` to `InputStream` and `OutputStream`,
+* Renamed `InputBuffer` and `OutputBuffer` to `InputStream` and `OutputStream`,
   respectively.
 
-- Added `readBits` method to `InputStream`.
+* Added `readBits` method to `InputStream`.
